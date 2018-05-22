@@ -11,6 +11,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/log"
+	"os"
+	"net"
 )
 
 const (
@@ -27,7 +29,7 @@ var (
 )
 
 var (
-	listenAddress = flag.String("web.listen-address", ":9109", "Metrics and web interface address.")
+	listenAddress = flag.String("unix-sock", "/dev/shm/beanstalkd_exporter.sock", "Metrics for unix sock access.")
 	metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path to metrics.")
 
 	beanstalkdAddr  = flag.String("beanstalkd.addr", "localhost:11300", "Beanstalkd address")
@@ -298,6 +300,10 @@ var indexPage = []byte(`<html>
 
 func main() {
 	flag.Parse()
+	addr := "/dev/shm/beanstalkd_exporter.sock"
+	if listenAddress != nil {
+		addr = *listenAddress
+	}
 
 	var tubes []string
 	if *beanstalkdTubes != "" {
@@ -307,11 +313,20 @@ func main() {
 	exporter := NewBeanstalkdCollector(*beanstalkdAddr, tubes)
 	prometheus.MustRegister(exporter)
 
-	http.Handle(*metricsPath, prometheus.Handler())
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.Handle(*metricsPath, prometheus.Handler())
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(indexPage)
 	})
 
-	log.Infof("Starting Server: %s", *listenAddress)
-	log.Fatal(http.ListenAndServe(*listenAddress, nil))
+	server := http.Server{
+		Handler: mux, // http.DefaultServeMux,
+	}
+	os.Remove(addr)
+
+	listener, err := net.Listen("unix", addr)
+	if err != nil {
+		panic(err)
+	}
+	server.Serve(listener)
 }
